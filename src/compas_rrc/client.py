@@ -7,6 +7,7 @@ from compas_fab.backends import RosClient
 from .common import CLIENT_PROTOCOL_VERSION
 from .common import FutureResult
 from .common import InstructionException
+from concurrent.futures import CancelledError
 
 __all__ = ["RosClient", "AbbClient"]
 
@@ -263,7 +264,17 @@ class AbbClient(object):
 
         return result
 
-    def send_and_wait(self, instruction, timeout=None):
+    def wait_for_future(self, future, cancel_event):
+        """Block until the robot finishes, but stay interruptible."""
+        while True:
+            if cancel_event.is_set():
+                raise CancelledError("Motion cancelled")
+            try:
+                return future.result(timeout=None)
+            except compas_rrc.common.TimeoutException:
+                continue
+
+    def send_and_wait(self, instruction, timeout=None, cancel_event=None):
         """Send instruction and wait for feedback.
 
         This is a blocking call, it will only return once the robot
@@ -299,7 +310,10 @@ class AbbClient(object):
             instruction.feedback_level = 1
 
         future = self.send(instruction)
-        return future.result(timeout)
+        if cancel_event is None:
+            return future.result(timeout=timeout)
+        else:
+            return self.wait_for_future(future, cancel_event)
 
     def send_and_subscribe(self, instruction, callback):
         """Send instruction and activate a service on the robot to stream feedback at a regular inverval.
