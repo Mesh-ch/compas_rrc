@@ -5,7 +5,7 @@ import roslibpy
 from compas_fab.backends import RosClient
 
 from .common import CLIENT_PROTOCOL_VERSION
-from .common import FutureResult
+from .common import FutureResult, TimeoutException
 from .common import InstructionException
 from concurrent.futures import CancelledError
 
@@ -270,8 +270,8 @@ class AbbClient(object):
             if cancel_event.is_set():
                 raise CancelledError("Motion cancelled")
             try:
-                return future.result(timeout=None)
-            except compas_rrc.common.TimeoutException:
+                return future.result(timeout=0.1) # short timeout to remain interruptible
+            except TimeoutException:
                 continue
 
     def send_and_wait(self, instruction, timeout=None, cancel_event=None):
