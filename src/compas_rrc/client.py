@@ -13,6 +13,8 @@ __all__ = ["RosClient", "AbbClient"]
 
 
 FEEDBACK_ERROR_PREFIX = "Done FError "
+DEFAULT_ROS1_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/RobotMessage"
+DEFAULT_ROS2_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/msg/RobotMessage"
 
 
 def _get_key(message):
@@ -21,6 +23,12 @@ def _get_key(message):
 
 def _get_response_key(message):
     return "msg:{}".format(message["feedback_id"])
+
+
+def _resolve_ros_name(namespace, name):
+    if name.startswith("/"):
+        return name
+    return namespace + name
 
 
 class SequenceCounter(object):
@@ -105,7 +113,15 @@ class AbbClient(object):
 
     """
 
-    def __init__(self, ros, namespace="/rob1"):
+    def __init__(
+        self,
+        ros,
+        namespace="/rob1",
+        robot_message_type=DEFAULT_ROS1_ROBOT_MESSAGE_TYPE,
+        command_topic="robot_command",
+        response_topic="robot_response",
+        protocol_param="protocol_version",
+    ):
         """Initialize a new robot client instance.
 
         Parameters
@@ -115,28 +131,48 @@ class AbbClient(object):
         namespace : :obj:`str`
             Namespace to allow multiple robots to be controlled through the same ROS instance.
             Optional. If not specified, it will use namespace ``/rob1``.
+        robot_message_type : :obj:`str`
+            ROS message type used by command and response topics.
+            Defaults to the ROS 1 type ``compas_rrc_driver/RobotMessage``.
+            Use ROS 2 type format (e.g. ``compas_rrc_driver/msg/RobotMessage``)
+            when connecting to a ROS 2 rosbridge setup.
+        command_topic : :obj:`str`
+            Name of the robot command topic. Relative names are resolved against
+            the namespace; absolute names (starting with ``/``) are used as-is.
+        response_topic : :obj:`str`
+            Name of the robot response topic. Relative names are resolved against
+            the namespace; absolute names (starting with ``/``) are used as-is.
+        protocol_param : :obj:`str`
+            Name of the protocol version parameter. Relative names are resolved
+            against the namespace; absolute names are used as-is.
         """
         self.ros = ros
         self.counter = SequenceCounter()
         if not namespace.endswith("/"):
             namespace += "/"
+        self.namespace = namespace
+
+        protocol_param_name = _resolve_ros_name(namespace, protocol_param)
+        command_topic_name = _resolve_ros_name(namespace, command_topic)
+        response_topic_name = _resolve_ros_name(namespace, response_topic)
+
         self._version_checked = False
         self._server_protocol_check = dict(
             event=threading.Event(),
-            param=roslibpy.Param(ros, namespace + "protocol_version"),
+            param=roslibpy.Param(ros, protocol_param_name),
             version=None,
         )
         self.ros.on_ready(self.version_check)
         self.topic = roslibpy.Topic(
             ros,
-            namespace + "robot_command",
-            "compas_rrc_driver/RobotMessage",
+            command_topic_name,
+            robot_message_type,
             queue_size=None,
         )
         self.feedback = roslibpy.Topic(
             ros,
-            namespace + "robot_response",
-            "compas_rrc_driver/RobotMessage",
+            response_topic_name,
+            robot_message_type,
             queue_size=0,
         )
         self.feedback.subscribe(self.feedback_callback)
