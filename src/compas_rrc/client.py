@@ -15,6 +15,8 @@ __all__ = ["RosClient", "AbbClient"]
 FEEDBACK_ERROR_PREFIX = "Done FError "
 DEFAULT_ROS1_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/RobotMessage"
 DEFAULT_ROS2_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/msg/RobotMessage"
+DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE = "compas_rrc_driver/srv/GetProtocolVersion"
+DEFAULT_ROS2_PROTOCOL_SERVICE_NAME = "get_protocol_version"
 
 
 def _get_key(message):
@@ -45,6 +47,26 @@ def _build_protocol_param_names(namespace, protocol_param):
 
     # Preserve order while deduplicating.
     return list(dict.fromkeys(candidates))
+
+
+def _normalize_protocol_value(value):
+    if value is None:
+        return None
+    if isinstance(value, dict) and "value" in value:
+        value = value["value"]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            return None
+        if stripped.lstrip("-").isdigit():
+            try:
+                return int(stripped)
+            except Exception:
+                return value
+        return value
+    if isinstance(value, (int, float)):
+        return int(value)
+    return value
 
 
 class SequenceCounter(object):
@@ -164,11 +186,19 @@ class AbbClient(object):
         """
         self.ros = ros
         self.counter = SequenceCounter()
+        self.robot_message_type = robot_message_type
         if not namespace.endswith("/"):
             namespace += "/"
         self.namespace = namespace
 
         protocol_param_names = _build_protocol_param_names(namespace, protocol_param)
+        if robot_message_type == DEFAULT_ROS2_ROBOT_MESSAGE_TYPE:
+            # ROS 2 parameters are node-scoped; include the driver node name.
+            node_namespace = "{}compas_rrc_driver/".format(namespace)
+            protocol_param_names.extend(
+                _build_protocol_param_names(node_namespace, protocol_param)
+            )
+            protocol_param_names = list(dict.fromkeys(protocol_param_names))
         command_topic_name = _resolve_ros_name(namespace, command_topic)
         response_topic_name = _resolve_ros_name(namespace, response_topic)
 
@@ -200,36 +230,50 @@ class AbbClient(object):
     def version_check(self):
         """Check if the protocol version on the server matches the protocol version on the client."""
         version = None
-        for param_name in self._server_protocol_check["param_names"]:
+        if self.robot_message_type == DEFAULT_ROS2_ROBOT_MESSAGE_TYPE:
             try:
-                version = roslibpy.Param(self.ros, param_name).get()
+                version = self._get_protocol_version_via_service()
             except Exception:
-                continue
-            if version is not None:
-                break
+                version = None
+        else:
+            for param_name in self._server_protocol_check["param_names"]:
+                try:
+                    version = roslibpy.Param(self.ros, param_name).get()
+                    version = _normalize_protocol_value(version)
+                except Exception:
+                    continue
+                if version is not None:
+                    break
 
         self._server_protocol_check["version"] = version
         # No version is usually caused by wrong namespace in the connection, check that and raise correct error
         if self._server_protocol_check["version"] is None:
-            params = self.ros.get_params()
-
-            detected_namespaces = set()
-            tentative_namespaces = set()
-            for param in params:
-                if param.endswith("/robot_state_port") or param.endswith(
-                    "/protocol_version"
-                ):
-                    namespace = param[: param.rindex("/")]
-                    if namespace not in tentative_namespaces:
-                        tentative_namespaces.add(namespace)
-                    else:
-                        detected_namespaces.add(namespace)
-
-            raise Exception(
-                "Cannot find the specified namespace. Detected namespaces={}".format(
-                    sorted(detected_namespaces)
+            if self.robot_message_type == DEFAULT_ROS2_ROBOT_MESSAGE_TYPE:
+                raise Exception(
+                    "Cannot retrieve protocol version via service '{}' in namespace '{}'".format(
+                        DEFAULT_ROS2_PROTOCOL_SERVICE_NAME, self.namespace
+                    )
                 )
-            )
+            else:
+                params = self.ros.get_params()
+
+                detected_namespaces = set()
+                tentative_namespaces = set()
+                for param in params:
+                    if param.endswith("/robot_state_port") or param.endswith(
+                        "/protocol_version"
+                    ):
+                        namespace = param[: param.rindex("/")]
+                        if namespace not in tentative_namespaces:
+                            tentative_namespaces.add(namespace)
+                        else:
+                            detected_namespaces.add(namespace)
+
+                raise Exception(
+                    "Cannot find the specified namespace. Detected namespaces={}".format(
+                        sorted(detected_namespaces)
+                    )
+                )
 
         self._server_protocol_check["event"].set()
 
@@ -255,6 +299,42 @@ class AbbClient(object):
         self.topic.unadvertise()
         self.feedback.unsubscribe()
         time.sleep(0.5)
+
+    def _get_protocol_version_via_service(self):
+        service_name = _resolve_ros_name(
+            self.namespace, DEFAULT_ROS2_PROTOCOL_SERVICE_NAME
+        )
+        service = roslibpy.Service(
+            self.ros, service_name, DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE
+        )
+        event = threading.Event()
+        result = {}
+
+        def _on_response(response):
+            result["version"] = response.get("version")
+            event.set()
+
+        def _on_error(error):
+            result["error"] = error
+            event.set()
+
+        service.call(roslibpy.ServiceRequest(), callback=_on_response, errback=_on_error)
+
+        if not event.wait(5.0):
+            raise Exception(
+                "Timeout while calling protocol version service {}".format(
+                    service_name
+                )
+            )
+
+        if "error" in result:
+            raise Exception(
+                "Error calling protocol version service {}: {}".format(
+                    service_name, result["error"]
+                )
+            )
+
+        return _normalize_protocol_value(result.get("version"))
 
     def send(self, instruction):
         """Sends an instruction to the robot without waiting.
