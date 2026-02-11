@@ -26,9 +26,25 @@ def _get_response_key(message):
 
 
 def _resolve_ros_name(namespace, name):
-    if name.startswith("/"):
+    if name.startswith("/") or ":" in name:
         return name
     return namespace + name
+
+
+def _build_protocol_param_names(namespace, protocol_param):
+    resolved_name = _resolve_ros_name(namespace, protocol_param)
+    candidates = [resolved_name]
+
+    if ":" not in resolved_name:
+        parts = resolved_name.rsplit("/", 1)
+        if len(parts) == 2 and parts[0]:
+            candidates.append("{}:{}".format(parts[0], parts[1]))
+        elif resolved_name.startswith("/") and resolved_name.count("/") == 1:
+            namespace_node = namespace[:-1] if namespace.endswith("/") else namespace
+            candidates.append("{}:{}".format(namespace_node, resolved_name[1:]))
+
+    # Preserve order while deduplicating.
+    return list(dict.fromkeys(candidates))
 
 
 class SequenceCounter(object):
@@ -152,14 +168,14 @@ class AbbClient(object):
             namespace += "/"
         self.namespace = namespace
 
-        protocol_param_name = _resolve_ros_name(namespace, protocol_param)
+        protocol_param_names = _build_protocol_param_names(namespace, protocol_param)
         command_topic_name = _resolve_ros_name(namespace, command_topic)
         response_topic_name = _resolve_ros_name(namespace, response_topic)
 
         self._version_checked = False
         self._server_protocol_check = dict(
             event=threading.Event(),
-            param=roslibpy.Param(ros, protocol_param_name),
+            param_names=protocol_param_names,
             version=None,
         )
         self.ros.on_ready(self.version_check)
@@ -183,9 +199,16 @@ class AbbClient(object):
 
     def version_check(self):
         """Check if the protocol version on the server matches the protocol version on the client."""
-        self._server_protocol_check["version"] = self._server_protocol_check[
-            "param"
-        ].get()
+        version = None
+        for param_name in self._server_protocol_check["param_names"]:
+            try:
+                version = roslibpy.Param(self.ros, param_name).get()
+            except Exception:
+                continue
+            if version is not None:
+                break
+
+        self._server_protocol_check["version"] = version
         # No version is usually caused by wrong namespace in the connection, check that and raise correct error
         if self._server_protocol_check["version"] is None:
             params = self.ros.get_params()
