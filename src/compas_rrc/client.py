@@ -17,6 +17,9 @@ DEFAULT_ROS1_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/RobotMessage"
 DEFAULT_ROS2_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/msg/RobotMessage"
 DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE = "compas_rrc_driver/srv/GetProtocolVersion"
 DEFAULT_ROS2_PROTOCOL_SERVICE_NAME = "get_protocol_version"
+DEFAULT_COMMAND_TOPIC = "robot_command"
+DEFAULT_RESPONSE_TOPIC = "robot_response"
+DEFAULT_PROTOCOL_PARAM = "protocol_version"
 
 
 def _get_key(message):
@@ -155,10 +158,7 @@ class AbbClient(object):
         self,
         ros,
         namespace="/rob1",
-        robot_message_type=DEFAULT_ROS1_ROBOT_MESSAGE_TYPE,
-        command_topic="robot_command",
-        response_topic="robot_response",
-        protocol_param="protocol_version",
+        backend="ROS1",
     ):
         """Initialize a new robot client instance.
 
@@ -169,21 +169,17 @@ class AbbClient(object):
         namespace : :obj:`str`
             Namespace to allow multiple robots to be controlled through the same ROS instance.
             Optional. If not specified, it will use namespace ``/rob1``.
-        robot_message_type : :obj:`str`
-            ROS message type used by command and response topics.
-            Defaults to the ROS 1 type ``compas_rrc_driver/RobotMessage``.
-            Use ROS 2 type format (e.g. ``compas_rrc_driver/msg/RobotMessage``)
-            when connecting to a ROS 2 rosbridge setup.
-        command_topic : :obj:`str`
-            Name of the robot command topic. Relative names are resolved against
-            the namespace; absolute names (starting with ``/``) are used as-is.
-        response_topic : :obj:`str`
-            Name of the robot response topic. Relative names are resolved against
-            the namespace; absolute names (starting with ``/``) are used as-is.
-        protocol_param : :obj:`str`
-            Name of the protocol version parameter. Relative names are resolved
-            against the namespace; absolute names are used as-is.
+        backend : :obj:`str`
+            Backend selector: ``"ROS1"``, ``"ROS2"``.
         """
+        if backend not in ("ROS1", "ROS2"):
+            raise ValueError("backend must be 'ROS1' or 'ROS2' (got '{}')".format(backend))
+
+        if backend == "ROS2":
+            robot_message_type = DEFAULT_ROS2_ROBOT_MESSAGE_TYPE
+        else:
+            robot_message_type = DEFAULT_ROS1_ROBOT_MESSAGE_TYPE
+
         self.ros = ros
         self.counter = SequenceCounter()
         self.robot_message_type = robot_message_type
@@ -191,16 +187,14 @@ class AbbClient(object):
             namespace += "/"
         self.namespace = namespace
 
-        protocol_param_names = _build_protocol_param_names(namespace, protocol_param)
-        if robot_message_type == DEFAULT_ROS2_ROBOT_MESSAGE_TYPE:
+        protocol_param_names = _build_protocol_param_names(namespace, DEFAULT_PROTOCOL_PARAM)
+        if backend == "ROS2":
             # ROS 2 parameters are node-scoped; include the driver node name.
             node_namespace = "{}compas_rrc_driver/".format(namespace)
-            protocol_param_names.extend(
-                _build_protocol_param_names(node_namespace, protocol_param)
-            )
+            protocol_param_names.extend(_build_protocol_param_names(node_namespace, DEFAULT_PROTOCOL_PARAM))
             protocol_param_names = list(dict.fromkeys(protocol_param_names))
-        command_topic_name = _resolve_ros_name(namespace, command_topic)
-        response_topic_name = _resolve_ros_name(namespace, response_topic)
+        command_topic_name = _resolve_ros_name(namespace, DEFAULT_COMMAND_TOPIC)
+        response_topic_name = _resolve_ros_name(namespace, DEFAULT_RESPONSE_TOPIC)
 
         self._version_checked = False
         self._server_protocol_check = dict(
@@ -260,9 +254,7 @@ class AbbClient(object):
                 detected_namespaces = set()
                 tentative_namespaces = set()
                 for param in params:
-                    if param.endswith("/robot_state_port") or param.endswith(
-                        "/protocol_version"
-                    ):
+                    if param.endswith("/robot_state_port") or param.endswith("/protocol_version"):
                         namespace = param[: param.rindex("/")]
                         if namespace not in tentative_namespaces:
                             tentative_namespaces.add(namespace)
@@ -270,9 +262,7 @@ class AbbClient(object):
                             detected_namespaces.add(namespace)
 
                 raise Exception(
-                    "Cannot find the specified namespace. Detected namespaces={}".format(
-                        sorted(detected_namespaces)
-                    )
+                    "Cannot find the specified namespace. Detected namespaces={}".format(sorted(detected_namespaces))
                 )
 
         self._server_protocol_check["event"].set()
@@ -301,12 +291,8 @@ class AbbClient(object):
         time.sleep(0.5)
 
     def _get_protocol_version_via_service(self):
-        service_name = _resolve_ros_name(
-            self.namespace, DEFAULT_ROS2_PROTOCOL_SERVICE_NAME
-        )
-        service = roslibpy.Service(
-            self.ros, service_name, DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE
-        )
+        service_name = _resolve_ros_name(self.namespace, DEFAULT_ROS2_PROTOCOL_SERVICE_NAME)
+        service = roslibpy.Service(self.ros, service_name, DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE)
         event = threading.Event()
         result = {}
 
@@ -321,18 +307,10 @@ class AbbClient(object):
         service.call(roslibpy.ServiceRequest(), callback=_on_response, errback=_on_error)
 
         if not event.wait(5.0):
-            raise Exception(
-                "Timeout while calling protocol version service {}".format(
-                    service_name
-                )
-            )
+            raise Exception("Timeout while calling protocol version service {}".format(service_name))
 
         if "error" in result:
-            raise Exception(
-                "Error calling protocol version service {}: {}".format(
-                    service_name, result["error"]
-                )
-            )
+            raise Exception("Error calling protocol version service {}: {}".format(service_name, result["error"]))
 
         return _normalize_protocol_value(result.get("version"))
 
@@ -392,11 +370,7 @@ class AbbClient(object):
 
         if instruction.feedback_level > 0:
             result = FutureResult()
-            parser = (
-                instruction.parse_feedback
-                if hasattr(instruction, "parse_feedback")
-                else None
-            )
+            parser = instruction.parse_feedback if hasattr(instruction, "parse_feedback") else None
             self.futures[key] = dict(result=result, parser=parser)
 
         self.topic.publish(roslibpy.Message(instruction.msg))
@@ -409,7 +383,7 @@ class AbbClient(object):
             if cancel_event.is_set():
                 raise CancelledError("Motion cancelled")
             try:
-                return future.result(timeout=0.1) # short timeout to remain interruptible
+                return future.result(timeout=0.1)  # short timeout to remain interruptible
             except TimeoutException:
                 continue
 
@@ -474,11 +448,7 @@ class AbbClient(object):
 
         key = _get_key(instruction)
 
-        parser = (
-            instruction.parse_feedback
-            if hasattr(instruction, "parse_feedback")
-            else None
-        )
+        parser = instruction.parse_feedback if hasattr(instruction, "parse_feedback") else None
         self.futures[key] = dict(callback=callback, parser=parser)
 
         self.topic.publish(roslibpy.Message(instruction.msg))
