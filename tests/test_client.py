@@ -1,8 +1,7 @@
 import threading
 import time
-import types
 
-from compas_rrc.client import AbbClient, SequenceCounter, _build_protocol_param_names
+from compas_rrc.client import SequenceCounter
 
 
 def test_sequence_id_rollover():
