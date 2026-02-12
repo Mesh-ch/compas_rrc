@@ -13,6 +13,13 @@ __all__ = ["RosClient", "AbbClient"]
 
 
 FEEDBACK_ERROR_PREFIX = "Done FError "
+DEFAULT_ROS1_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/RobotMessage"
+DEFAULT_ROS2_ROBOT_MESSAGE_TYPE = "compas_rrc_driver/msg/RobotMessage"
+DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE = "compas_rrc_driver/srv/GetProtocolVersion"
+DEFAULT_ROS2_PROTOCOL_SERVICE_NAME = "get_protocol_version"
+DEFAULT_COMMAND_TOPIC = "robot_command"
+DEFAULT_RESPONSE_TOPIC = "robot_response"
+DEFAULT_PROTOCOL_PARAM = "protocol_version"
 
 
 def _get_key(message):
@@ -21,6 +28,48 @@ def _get_key(message):
 
 def _get_response_key(message):
     return "msg:{}".format(message["feedback_id"])
+
+
+def _resolve_ros_name(namespace, name):
+    if name.startswith("/") or ":" in name:
+        return name
+    return namespace + name
+
+
+def _build_protocol_param_names(namespace, protocol_param):
+    resolved_name = _resolve_ros_name(namespace, protocol_param)
+    candidates = [resolved_name]
+
+    if ":" not in resolved_name:
+        parts = resolved_name.rsplit("/", 1)
+        if len(parts) == 2 and parts[0]:
+            candidates.append("{}:{}".format(parts[0], parts[1]))
+        elif resolved_name.startswith("/") and resolved_name.count("/") == 1:
+            namespace_node = namespace[:-1] if namespace.endswith("/") else namespace
+            candidates.append("{}:{}".format(namespace_node, resolved_name[1:]))
+
+    # Preserve order while deduplicating.
+    return list(dict.fromkeys(candidates))
+
+
+def _normalize_protocol_value(value):
+    if value is None:
+        return None
+    if isinstance(value, dict) and "value" in value:
+        value = value["value"]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            return None
+        if stripped.lstrip("-").isdigit():
+            try:
+                return int(stripped)
+            except Exception:
+                return value
+        return value
+    if isinstance(value, (int, float)):
+        return int(value)
+    return value
 
 
 class SequenceCounter(object):
@@ -105,7 +154,12 @@ class AbbClient(object):
 
     """
 
-    def __init__(self, ros, namespace="/rob1"):
+    def __init__(
+        self,
+        ros,
+        namespace="/rob1",
+        backend="ROS1",
+    ):
         """Initialize a new robot client instance.
 
         Parameters
@@ -115,28 +169,50 @@ class AbbClient(object):
         namespace : :obj:`str`
             Namespace to allow multiple robots to be controlled through the same ROS instance.
             Optional. If not specified, it will use namespace ``/rob1``.
+        backend : :obj:`str`
+            Backend selector: ``"ROS1"``, ``"ROS2"``.
         """
+        if backend not in ("ROS1", "ROS2"):
+            raise ValueError("backend must be 'ROS1' or 'ROS2' (got '{}')".format(backend))
+
+        if backend == "ROS2":
+            robot_message_type = DEFAULT_ROS2_ROBOT_MESSAGE_TYPE
+        else:
+            robot_message_type = DEFAULT_ROS1_ROBOT_MESSAGE_TYPE
+
         self.ros = ros
         self.counter = SequenceCounter()
+        self.robot_message_type = robot_message_type
         if not namespace.endswith("/"):
             namespace += "/"
+        self.namespace = namespace
+
+        protocol_param_names = _build_protocol_param_names(namespace, DEFAULT_PROTOCOL_PARAM)
+        if backend == "ROS2":
+            # ROS 2 parameters are node-scoped; include the driver node name.
+            node_namespace = "{}compas_rrc_driver/".format(namespace)
+            protocol_param_names.extend(_build_protocol_param_names(node_namespace, DEFAULT_PROTOCOL_PARAM))
+            protocol_param_names = list(dict.fromkeys(protocol_param_names))
+        command_topic_name = _resolve_ros_name(namespace, DEFAULT_COMMAND_TOPIC)
+        response_topic_name = _resolve_ros_name(namespace, DEFAULT_RESPONSE_TOPIC)
+
         self._version_checked = False
         self._server_protocol_check = dict(
             event=threading.Event(),
-            param=roslibpy.Param(ros, namespace + "protocol_version"),
+            param_names=protocol_param_names,
             version=None,
         )
         self.ros.on_ready(self.version_check)
         self.topic = roslibpy.Topic(
             ros,
-            namespace + "robot_command",
-            "compas_rrc_driver/RobotMessage",
+            command_topic_name,
+            robot_message_type,
             queue_size=None,
         )
         self.feedback = roslibpy.Topic(
             ros,
-            namespace + "robot_response",
-            "compas_rrc_driver/RobotMessage",
+            response_topic_name,
+            robot_message_type,
             queue_size=0,
         )
         self.feedback.subscribe(self.feedback_callback)
@@ -147,30 +223,47 @@ class AbbClient(object):
 
     def version_check(self):
         """Check if the protocol version on the server matches the protocol version on the client."""
-        self._server_protocol_check["version"] = self._server_protocol_check[
-            "param"
-        ].get()
+        version = None
+        if self.robot_message_type == DEFAULT_ROS2_ROBOT_MESSAGE_TYPE:
+            try:
+                version = self._get_protocol_version_via_service()
+            except Exception:
+                version = None
+        else:
+            for param_name in self._server_protocol_check["param_names"]:
+                try:
+                    version = roslibpy.Param(self.ros, param_name).get()
+                    version = _normalize_protocol_value(version)
+                except Exception:
+                    continue
+                if version is not None:
+                    break
+
+        self._server_protocol_check["version"] = version
         # No version is usually caused by wrong namespace in the connection, check that and raise correct error
         if self._server_protocol_check["version"] is None:
-            params = self.ros.get_params()
-
-            detected_namespaces = set()
-            tentative_namespaces = set()
-            for param in params:
-                if param.endswith("/robot_state_port") or param.endswith(
-                    "/protocol_version"
-                ):
-                    namespace = param[: param.rindex("/")]
-                    if namespace not in tentative_namespaces:
-                        tentative_namespaces.add(namespace)
-                    else:
-                        detected_namespaces.add(namespace)
-
-            raise Exception(
-                "Cannot find the specified namespace. Detected namespaces={}".format(
-                    sorted(detected_namespaces)
+            if self.robot_message_type == DEFAULT_ROS2_ROBOT_MESSAGE_TYPE:
+                raise Exception(
+                    "Cannot retrieve protocol version via service '{}' in namespace '{}'".format(
+                        DEFAULT_ROS2_PROTOCOL_SERVICE_NAME, self.namespace
+                    )
                 )
-            )
+            else:
+                params = self.ros.get_params()
+
+                detected_namespaces = set()
+                tentative_namespaces = set()
+                for param in params:
+                    if param.endswith("/robot_state_port") or param.endswith("/protocol_version"):
+                        namespace = param[: param.rindex("/")]
+                        if namespace not in tentative_namespaces:
+                            tentative_namespaces.add(namespace)
+                        else:
+                            detected_namespaces.add(namespace)
+
+                raise Exception(
+                    "Cannot find the specified namespace. Detected namespaces={}".format(sorted(detected_namespaces))
+                )
 
         self._server_protocol_check["event"].set()
 
@@ -196,6 +289,30 @@ class AbbClient(object):
         self.topic.unadvertise()
         self.feedback.unsubscribe()
         time.sleep(0.5)
+
+    def _get_protocol_version_via_service(self):
+        service_name = _resolve_ros_name(self.namespace, DEFAULT_ROS2_PROTOCOL_SERVICE_NAME)
+        service = roslibpy.Service(self.ros, service_name, DEFAULT_ROS2_PROTOCOL_SERVICE_TYPE)
+        event = threading.Event()
+        result = {}
+
+        def _on_response(response):
+            result["version"] = response.get("version")
+            event.set()
+
+        def _on_error(error):
+            result["error"] = error
+            event.set()
+
+        service.call(roslibpy.ServiceRequest(), callback=_on_response, errback=_on_error)
+
+        if not event.wait(5.0):
+            raise Exception("Timeout while calling protocol version service {}".format(service_name))
+
+        if "error" in result:
+            raise Exception("Error calling protocol version service {}: {}".format(service_name, result["error"]))
+
+        return _normalize_protocol_value(result.get("version"))
 
     def send(self, instruction):
         """Sends an instruction to the robot without waiting.
@@ -253,11 +370,7 @@ class AbbClient(object):
 
         if instruction.feedback_level > 0:
             result = FutureResult()
-            parser = (
-                instruction.parse_feedback
-                if hasattr(instruction, "parse_feedback")
-                else None
-            )
+            parser = instruction.parse_feedback if hasattr(instruction, "parse_feedback") else None
             self.futures[key] = dict(result=result, parser=parser)
 
         self.topic.publish(roslibpy.Message(instruction.msg))
@@ -270,7 +383,7 @@ class AbbClient(object):
             if cancel_event.is_set():
                 raise CancelledError("Motion cancelled")
             try:
-                return future.result(timeout=0.1) # short timeout to remain interruptible
+                return future.result(timeout=0.1)  # short timeout to remain interruptible
             except TimeoutException:
                 continue
 
@@ -335,11 +448,7 @@ class AbbClient(object):
 
         key = _get_key(instruction)
 
-        parser = (
-            instruction.parse_feedback
-            if hasattr(instruction, "parse_feedback")
-            else None
-        )
+        parser = instruction.parse_feedback if hasattr(instruction, "parse_feedback") else None
         self.futures[key] = dict(callback=callback, parser=parser)
 
         self.topic.publish(roslibpy.Message(instruction.msg))
