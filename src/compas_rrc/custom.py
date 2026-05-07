@@ -56,9 +56,9 @@ class CustomInstruction(ROSmsg):
 class PickupStirrup(CustomInstruction):
     """Custom instruction to pick up a stirrup. This is a wrapper around :class:`CustomInstruction`."""
 
-    def __init__(self, grasping_frame, max_gap_width, center_x_bound):
+    def __init__(self, grasping_frame, speed, zone, entry_frame, speed_entry, zone_entry, max_gap_width, center_x_bound):
         string_values = []
-        float_values = [*grasping_frame.point, *grasping_frame.quaternion, max_gap_width, center_x_bound]
+        float_values = [*grasping_frame.point, *grasping_frame.quaternion, speed, zone, *entry_frame.point, *entry_frame.quaternion, speed_entry, zone_entry, max_gap_width, center_x_bound]
         super().__init__(
             "PickupStirrup",
             string_values=string_values,
