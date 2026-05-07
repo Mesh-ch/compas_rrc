@@ -3,7 +3,7 @@ from compas_fab.backends.ros.messages import ROSmsg
 from compas_rrc.common import ExecutionLevel
 from compas_rrc.common import FeedbackLevel
 
-__all__ = ["CustomInstruction"]
+__all__ = ["CustomInstruction", "PickupStirrup", "MoveToFrameTrigger", "WaitForDigital"]
 
 
 class CustomInstruction(ROSmsg):
@@ -52,3 +52,47 @@ class CustomInstruction(ROSmsg):
         self.exec_level = execution_level
         self.string_values = string_values
         self.float_values = float_values
+
+class PickupStirrup(CustomInstruction):
+    """Custom instruction to pick up a stirrup. This is a wrapper around :class:`CustomInstruction`."""
+
+    def __init__(self, grasping_frame, max_gap_width, center_x_bound):
+        string_values = []
+        float_values = [*grasping_frame.point, *grasping_frame.quaternion, max_gap_width, center_x_bound]
+        super().__init__(
+            "PickupStirrup",
+            string_values=string_values,
+            float_values=float_values,
+        )
+    
+    def parse_feedback(self, result):
+        success = result.get("float_values", [0])[0] == 1.0
+        return success
+    
+
+class MoveToFrameTrigger(CustomInstruction):
+    """Custom instruction to move to a frame with a trigger. This is a wrapper around :class:`CustomInstruction`."""
+
+    def __init__(self, target_frame, speed, zone, signal_name, signal_value=1):
+        zone_value = getattr(zone, "value", zone)
+        string_values = [signal_name]
+        float_values = [*target_frame.point, *target_frame.quaternion, speed, zone_value, signal_value]
+        super().__init__(
+            "MoveToFrameTrigger",
+            string_values=string_values,
+            float_values=float_values,
+        )
+
+class WaitForDigital(CustomInstruction):
+    """Custom instruction to wait for a digital signal. This is a wrapper around :class:`CustomInstruction`."""
+
+    def __init__(self, signal_name, value, timeout=None):
+        if timeout is None:
+            timeout = -1.0
+        string_values = [signal_name]
+        float_values = [value, timeout]
+        super().__init__(
+            "WaitForDigital",
+            string_values=string_values,
+            float_values=float_values,
+        )
