@@ -98,7 +98,13 @@ from compas_rrc.common import (
     RobotJoints,
     TimeoutException,
 )
-from compas_rrc.custom import CustomInstruction, PickupStirrup, MoveToFrameTrigger, WaitForDigital
+from compas_rrc.custom import (
+    CustomInstruction,
+    PickupStirrup,
+    MoveToFrameTrigger,
+    WaitForDigital,
+    PromptContinue,
+)
 from compas_rrc.io import (
     PulseDigital,
     ReadAnalog,
@@ -174,4 +180,5 @@ __all__ = [
     "PickupStirrup",
     "MoveToFrameTrigger",
     "WaitForDigital",
+    "PromptContinue",
 ]

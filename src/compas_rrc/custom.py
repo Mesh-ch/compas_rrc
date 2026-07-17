@@ -3,7 +3,7 @@ from compas_fab.backends.ros.messages import ROSmsg
 from compas_rrc.common import ExecutionLevel
 from compas_rrc.common import FeedbackLevel
 
-__all__ = ["CustomInstruction", "PickupStirrup", "MoveToFrameTrigger", "WaitForDigital"]
+__all__ = ["CustomInstruction", "PickupStirrup", "MoveToFrameTrigger", "WaitForDigital", "PromptContinue"]
 
 
 class CustomInstruction(ROSmsg):
@@ -96,3 +96,19 @@ class WaitForDigital(CustomInstruction):
             string_values=string_values,
             float_values=float_values,
         )
+
+class PromptContinue(CustomInstruction):
+    """Custom instruction to prompt the user to continue. This is a wrapper around :class:`CustomInstruction`."""
+
+    def __init__(self, message):
+        string_values = [message]
+        float_values = []
+        super().__init__(
+            "PromptContinue",
+            string_values=string_values,
+            float_values=float_values,
+        )
+    
+    def parse_feedback(self, result):
+        success = result.get("string_values", [""])[0] == "Yes"
+        return success
