@@ -53,22 +53,46 @@ class CustomInstruction(ROSmsg):
         self.string_values = string_values
         self.float_values = float_values
 
+
 class PickupStirrup(CustomInstruction):
     """Custom instruction to pick up a stirrup. This is a wrapper around :class:`CustomInstruction`."""
 
-    def __init__(self, grasping_frame, speed, zone, entry_frame, speed_entry, zone_entry, max_gap_width, center_x_bound):
+    def __init__(
+        self,
+        grasping_frame,
+        speed,
+        zone,
+        entry_frame,
+        speed_entry,
+        zone_entry,
+        max_gap_width,
+        center_x_bound,
+        is_mirrored=False,
+    ):
         string_values = []
-        float_values = [*grasping_frame.point, *grasping_frame.quaternion, speed, zone, *entry_frame.point, *entry_frame.quaternion, speed_entry, zone_entry, max_gap_width, center_x_bound]
+        float_values = [
+            *grasping_frame.point,  # x, y, z
+            *grasping_frame.quaternion,  # qw, qx, qy, qz
+            speed,  # speed grasp
+            zone,  # zone grasp
+            *entry_frame.point,  # x, y, z
+            *entry_frame.quaternion,  # qw, qx, qy, qz
+            speed_entry,  # speed_entry
+            zone_entry,  # zone_entry
+            max_gap_width,  # max_gap_width
+            center_x_bound,  # center_x_bound
+            float(is_mirrored),  # is_mirrored
+        ]
         super().__init__(
             "PickupStirrup",
             string_values=string_values,
             float_values=float_values,
         )
-    
+
     def parse_feedback(self, result):
         success = result.get("float_values", [0])[0] == 1.0
         return success
-    
+
 
 class MoveToFrameTrigger(CustomInstruction):
     """Custom instruction to move to a frame with a trigger. This is a wrapper around :class:`CustomInstruction`."""
@@ -82,6 +106,7 @@ class MoveToFrameTrigger(CustomInstruction):
             string_values=string_values,
             float_values=float_values,
         )
+
 
 class WaitForDigital(CustomInstruction):
     """Custom instruction to wait for a digital signal. This is a wrapper around :class:`CustomInstruction`."""
@@ -97,6 +122,7 @@ class WaitForDigital(CustomInstruction):
             float_values=float_values,
         )
 
+
 class PromptContinue(CustomInstruction):
     """Custom instruction to prompt the user to continue. This is a wrapper around :class:`CustomInstruction`."""
 
@@ -108,7 +134,7 @@ class PromptContinue(CustomInstruction):
             string_values=string_values,
             float_values=float_values,
         )
-    
+
     def parse_feedback(self, result):
         success = result.get("string_values", [""])[0] == "Yes"
         return success
