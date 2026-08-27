@@ -67,9 +67,13 @@ class PickupStirrup(CustomInstruction):
         zone_entry,
         max_gap_width,
         center_x_bound,
+        gripper_open_io_name,
+        gripper_closed_io_name,
+        laser_on_io_name,
+        laser_is_on_io_name,
         is_mirrored=False,
     ):
-        string_values = []
+        string_values = [gripper_open_io_name, gripper_closed_io_name, laser_on_io_name, laser_is_on_io_name]
         float_values = [
             *grasping_frame.point,  # x, y, z
             *grasping_frame.quaternion,  # qw, qx, qy, qz
