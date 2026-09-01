@@ -72,6 +72,9 @@ class PickupStirrup(CustomInstruction):
         laser_on_io_name,
         laser_is_on_io_name,
         is_mirrored=False,
+        correction_mode=1,
+        direct_y_correction=0.0,
+        direct_z_correction=0.0,
     ):
         string_values = [gripper_open_io_name, gripper_closed_io_name, laser_on_io_name, laser_is_on_io_name]
         float_values = [
@@ -86,6 +89,9 @@ class PickupStirrup(CustomInstruction):
             max_gap_width,  # max_gap_width
             center_x_bound,  # center_x_bound
             float(is_mirrored),  # is_mirrored
+            correction_mode,  # correction_mode
+            direct_y_correction,  # direct_y_correction
+            direct_z_correction,  # direct_z_correction
         ]
         super().__init__(
             "PickupStirrup",
