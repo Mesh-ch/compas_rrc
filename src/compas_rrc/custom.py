@@ -3,7 +3,16 @@ from compas_fab.backends.ros.messages import ROSmsg
 from compas_rrc.common import ExecutionLevel
 from compas_rrc.common import FeedbackLevel
 
-__all__ = ["CustomInstruction", "PickupStirrup", "MoveToFrameTrigger", "WaitForDigital", "PromptContinue"]
+__all__ = [
+    "CustomInstruction",
+    "PickupStirrup",
+    "PickupStirrupDirect",
+    "PickupStirrupOXM",
+    "PickupStirrupUncorrected",
+    "MoveToFrameTrigger",
+    "WaitForDigital",
+    "PromptContinue",
+]
 
 
 class CustomInstruction(ROSmsg):
@@ -54,8 +63,38 @@ class CustomInstruction(ROSmsg):
         self.float_values = float_values
 
 
-class PickupStirrup(CustomInstruction):
-    """Custom instruction to pick up a stirrup. This is a wrapper around :class:`CustomInstruction`."""
+class _PickupStirrup(CustomInstruction):
+    def __init__(
+        self,
+        instruction,
+        grasping_frame,
+        speed,
+        zone,
+        entry_frame,
+        speed_entry,
+        zone_entry,
+        string_values,
+        strategy_values=(),
+    ):
+        float_values = [
+            *grasping_frame.point,
+            *grasping_frame.quaternion,
+            speed,
+            zone,
+            *entry_frame.point,
+            *entry_frame.quaternion,
+            speed_entry,
+            zone_entry,
+            *strategy_values,
+        ]
+        super().__init__(instruction, string_values=string_values, float_values=float_values)
+
+    def parse_feedback(self, result):
+        return result.get("float_values", [0])[0] == 1.0
+
+
+class PickupStirrupDirect(_PickupStirrup):
+    """Pick up a stirrup using caller-supplied grasp corrections."""
 
     def __init__(
         self,
@@ -65,43 +104,85 @@ class PickupStirrup(CustomInstruction):
         entry_frame,
         speed_entry,
         zone_entry,
-        max_gap_width,
-        center_x_bound,
+        gripper_open_io_name,
+        gripper_closed_io_name,
+        y_correction,
+        final_z,
+        is_mirrored=False,
+    ):
+        super().__init__(
+            "PickupStirrupDirect",
+            grasping_frame,
+            speed,
+            zone,
+            entry_frame,
+            speed_entry,
+            zone_entry,
+            [gripper_open_io_name, gripper_closed_io_name],
+            [0.0, 0.0, float(is_mirrored), 0.0, y_correction, final_z],
+        )
+
+
+class PickupStirrupOXM(_PickupStirrup):
+    """Pick up a stirrup using corrections measured by the OXM sensor."""
+
+    def __init__(
+        self,
+        grasping_frame,
+        speed,
+        zone,
+        entry_frame,
+        speed_entry,
+        zone_entry,
         gripper_open_io_name,
         gripper_closed_io_name,
         laser_on_io_name,
         laser_is_on_io_name,
+        max_gap_width,
+        center_x_bound,
         is_mirrored=False,
         correction_mode=1,
-        direct_y_correction=0.0,
-        direct_z_correction=0.0,
     ):
-        string_values = [gripper_open_io_name, gripper_closed_io_name, laser_on_io_name, laser_is_on_io_name]
-        float_values = [
-            *grasping_frame.point,  # x, y, z
-            *grasping_frame.quaternion,  # qw, qx, qy, qz
-            speed,  # speed grasp
-            zone,  # zone grasp
-            *entry_frame.point,  # x, y, z
-            *entry_frame.quaternion,  # qw, qx, qy, qz
-            speed_entry,  # speed_entry
-            zone_entry,  # zone_entry
-            max_gap_width,  # max_gap_width
-            center_x_bound,  # center_x_bound
-            float(is_mirrored),  # is_mirrored
-            correction_mode,  # correction_mode
-            direct_y_correction,  # direct_y_correction
-            direct_z_correction,  # direct_z_correction
-        ]
         super().__init__(
-            "PickupStirrup",
-            string_values=string_values,
-            float_values=float_values,
+            "PickupStirrupOXM",
+            grasping_frame,
+            speed,
+            zone,
+            entry_frame,
+            speed_entry,
+            zone_entry,
+            [gripper_open_io_name, gripper_closed_io_name, laser_on_io_name, laser_is_on_io_name],
+            [max_gap_width, center_x_bound, float(is_mirrored), correction_mode],
         )
 
-    def parse_feedback(self, result):
-        success = result.get("float_values", [0])[0] == 1.0
-        return success
+
+class PickupStirrupUncorrected(_PickupStirrup):
+    """Pick up a stirrup without applying a grasp correction."""
+
+    def __init__(
+        self,
+        grasping_frame,
+        speed,
+        zone,
+        entry_frame,
+        speed_entry,
+        zone_entry,
+        gripper_open_io_name,
+        gripper_closed_io_name,
+    ):
+        super().__init__(
+            "PickupStirrupUncorrected",
+            grasping_frame,
+            speed,
+            zone,
+            entry_frame,
+            speed_entry,
+            zone_entry,
+            [gripper_open_io_name, gripper_closed_io_name],
+        )
+
+
+PickupStirrup = PickupStirrupDirect
 
 
 class MoveToFrameTrigger(CustomInstruction):

@@ -3,27 +3,23 @@ from compas.geometry import Frame
 import compas_rrc as rrc
 
 
-def test_pickup_stirrup_payload():
-    instruction = rrc.PickupStirrup(
+def test_pickup_stirrup_direct_payload():
+    instruction = rrc.PickupStirrupDirect(
         Frame.worldXY(),
         100,
         rrc.Zone.FINE,
         Frame([10, 20, 30], [1, 0, 0], [0, 1, 0]),
         50,
         rrc.Zone.Z5,
-        25,
-        10,
         "gripper_open",
         "gripper_close",
-        "laser_on",
-        "laser_is_on",
-        True,
-        3,
         2.5,
-        -4.0,
+        42.0,
+        True,
     )
 
-    assert instruction.string_values == ["gripper_open", "gripper_close", "laser_on", "laser_is_on"]
+    assert instruction.instruction == "PickupStirrupDirect"
+    assert instruction.string_values == ["gripper_open", "gripper_close"]
     assert instruction.float_values == [
         0.0,
         0.0,
@@ -43,16 +39,16 @@ def test_pickup_stirrup_payload():
         0.0,
         50,
         5,
-        25,
-        10,
+        0.0,
+        0.0,
         1.0,
-        3,
+        0.0,
         2.5,
-        -4.0,
+        42.0,
     ]
 
 
-def test_pickup_stirrup_defaults_to_legacy_y_correction():
+def test_pickup_stirrup_aliases_direct_variant():
     instruction = rrc.PickupStirrup(
         Frame.worldXY(),
         100,
@@ -60,12 +56,51 @@ def test_pickup_stirrup_defaults_to_legacy_y_correction():
         Frame.worldXY(),
         50,
         rrc.Zone.FINE,
-        25,
-        10,
+        "gripper_open",
+        "gripper_close",
+        0.0,
+        10.0,
+    )
+
+    assert isinstance(instruction, rrc.PickupStirrupDirect)
+    assert instruction.instruction == "PickupStirrupDirect"
+
+
+def test_pickup_stirrup_oxm_payload():
+    instruction = rrc.PickupStirrupOXM(
+        Frame.worldXY(),
+        100,
+        rrc.Zone.FINE,
+        Frame.worldXY(),
+        50,
+        rrc.Zone.FINE,
         "gripper_open",
         "gripper_close",
         "laser_on",
         "laser_is_on",
+        25.0,
+        10.0,
+        True,
+        2,
     )
 
-    assert instruction.float_values[-3:] == [1, 0.0, 0.0]
+    assert instruction.instruction == "PickupStirrupOXM"
+    assert instruction.string_values == ["gripper_open", "gripper_close", "laser_on", "laser_is_on"]
+    assert instruction.float_values[-4:] == [25.0, 10.0, 1.0, 2]
+
+
+def test_pickup_stirrup_uncorrected_payload():
+    instruction = rrc.PickupStirrupUncorrected(
+        Frame.worldXY(),
+        100,
+        rrc.Zone.FINE,
+        Frame.worldXY(),
+        50,
+        rrc.Zone.FINE,
+        "gripper_open",
+        "gripper_close",
+    )
+
+    assert instruction.instruction == "PickupStirrupUncorrected"
+    assert instruction.string_values == ["gripper_open", "gripper_close"]
+    assert len(instruction.float_values) == 18
