@@ -47,3 +47,36 @@ def test_multithreaded_consistency():
         t.join()
 
     assert counter.value == nr_of_threads * nr_of_increments
+
+
+def test_parser_error_resolves_future_with_exception():
+    from compas_rrc.client import AbbClient
+    from compas_rrc.common import FutureResult, InstructionException
+    from compas_rrc.custom import WaitForDigital
+
+    class BrokenWait(WaitForDigital):
+        def parse_feedback(self, result):
+            return result["float_values"][0]
+
+    instruction = BrokenWait("gripper_closed", 1)
+    client = AbbClient.__new__(AbbClient)
+    future = FutureResult()
+    client.futures = {"msg:7": dict(result=future, parser=instruction.parse_feedback, label="WaitForDigital(gripper_closed)")}
+
+    client.feedback_callback({"feedback_id": 7, "feedback": "Done", "float_values": []})
+
+    assert "msg:7" not in client.futures
+    try:
+        future.result(timeout=0.1)
+    except InstructionException as exc:
+        assert "WaitForDigital(gripper_closed)" in str(exc)
+        assert "IndexError" in str(exc)
+    else:
+        raise AssertionError("expected InstructionException")
+
+
+def test_describe_instruction_uses_first_string_value():
+    from compas_rrc.client import _describe_instruction
+    from compas_rrc.custom import WaitForDigital
+
+    assert _describe_instruction(WaitForDigital("gripper_closed", 1)) == "WaitForDigital(gripper_closed)"
