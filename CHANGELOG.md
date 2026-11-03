@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* A feedback parser that raises now resolves the pending `send`/`send_and_wait` future with an `InstructionException` naming the instruction (e.g. `WaitForDigital(gripper_closed)`) instead of leaving it unresolved forever.
+
 ### Removed
 
 

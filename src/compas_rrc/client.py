@@ -30,6 +30,12 @@ def _get_response_key(message):
     return "msg:{}".format(message["feedback_id"])
 
 
+def _describe_instruction(instruction):
+    name = getattr(instruction, "instruction", None) or type(instruction).__name__
+    string_values = getattr(instruction, "string_values", None)
+    return "{}({})".format(name, string_values[0]) if string_values else name
+
+
 def _resolve_ros_name(namespace, name):
     if name.startswith("/") or ":" in name:
         return name
@@ -371,7 +377,7 @@ class AbbClient(object):
         if instruction.feedback_level > 0:
             result = FutureResult()
             parser = instruction.parse_feedback if hasattr(instruction, "parse_feedback") else None
-            self.futures[key] = dict(result=result, parser=parser)
+            self.futures[key] = dict(result=result, parser=parser, label=_describe_instruction(instruction))
 
         self.topic.publish(roslibpy.Message(instruction.msg))
 
@@ -459,11 +465,15 @@ class AbbClient(object):
         future = self.futures.get(response_key, None)
 
         if future:
-            result = message
-            if future["parser"]:
-                result = future["parser"](result)
-            else:
-                result = default_feedback_parser(result)
+            try:
+                result = (future["parser"] or default_feedback_parser)(message)
+            except Exception as exc:
+                if "result" not in future:
+                    raise
+                # An exception escaping here is dropped by roslibpy, leaving the waiting future unresolved forever
+                result = InstructionException(
+                    "Failed to parse feedback of {}: {!r}".format(future["label"], exc), message
+                )
             if "result" in future:
                 future["result"]._set_result(result)
                 self.futures.pop(response_key)
